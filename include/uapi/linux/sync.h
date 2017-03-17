@@ -1,1 +1,0 @@
-../../../drivers/staging/android/uapi/sync.h
