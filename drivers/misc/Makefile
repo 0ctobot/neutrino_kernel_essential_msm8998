@@ -69,3 +69,8 @@ obj-$(CONFIG_MEMORY_STATE_TIME) += memory_state_time.o
 
 KASAN_SANITIZE_compat_qseecom.o := n
 KASAN_SANITIZE_qseecom.o := n
+
+# TODO: remove me b/62057517
+subdir-ccflags-y += \
+	-Wno-ignored-attributes \
+	-Wno-header-guard
