@@ -16,5 +16,5 @@ KASAN_SANITIZE_qcedev.o := n
 
 # TODO: remove me b/62057517
 subdir-ccflags-y += \
-	-Wno-frame-larger-than= \
+	$(call cc-option,-Wno-frame-larger-than=) \
 	-Wno-ignored-attributes
