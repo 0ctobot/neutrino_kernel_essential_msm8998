@@ -66,6 +66,7 @@ obj-$(CONFIG_UID_SYS_STATS) += uid_sys_stats.o
 obj-y				+= qcom/
 obj-$(CONFIG_QPNP_MISC) 	+= qpnp-misc.o
 obj-$(CONFIG_MEMORY_STATE_TIME) += memory_state_time.o
+CFLAGS_lkdtm_rodata.o		+= $(DISABLE_LTO)
 
 KASAN_SANITIZE_compat_qseecom.o := n
 KASAN_SANITIZE_qseecom.o := n
