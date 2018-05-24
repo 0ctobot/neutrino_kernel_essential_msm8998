@@ -72,5 +72,4 @@ KASAN_SANITIZE_qseecom.o := n
 
 # TODO: remove me b/62058353
 subdir-ccflags-y += \
-	-Wno-ignored-attributes \
 	-Wno-header-guard
