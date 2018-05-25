@@ -44,8 +44,6 @@
 #define RESET_HIGH_SLEEP1_MAX_US (RESET_HIGH_SLEEP1_MIN_US + 100)
 #define RESET_HIGH_SLEEP2_MIN_US 5000
 #define RESET_HIGH_SLEEP2_MAX_US (RESET_HIGH_SLEEP2_MIN_US + 100)
-#define PWR_ON_SLEEP_MIN_US 100
-#define PWR_ON_SLEEP_MAX_US (PWR_ON_SLEEP_MIN_US + 900)
 
 #define NUM_PARAMS_REG_ENABLE_SET 2
 
@@ -64,7 +62,6 @@ struct fpc1020_data {
 	int irq_gpio;
 	int rst_gpio;
 	struct mutex lock; /* To set/get exported values in sysfs */
-	bool prepared;
 	atomic_t wakeup_enabled; /* Used both in ISR and non-ISR */
 };
 
