@@ -404,55 +404,30 @@ static void stmvl53l0_read_calibration_file(struct stmvl53l0_data *data)
 		/* init the buffer with 0 */
 		for (i = 0; i < 8; i++)
 			buf[i] = 0;
-		f->f_op->read(f, buf, 8, &f->f_pos);
-		set_fs(fs);
-		vl53l0_dbgmsg("offset as:%s, buf[0]:%c\n", buf, buf[0]);
-		offset_calib = 0;
-		for (i = 0; i < 8; i++) {
-			if (i == 0 && buf[0] == '-')
-				is_sign = 1;
-			else if (buf[i] >= '0' && buf[i] <= '9')
-				offset_calib = offset_calib * 10 +
-					(buf[i] - '0');
-			else
-				break;
-		}
-		if (is_sign == 1)
-			offset_calib = -offset_calib;
-		VL53L0_SetOffsetCalibrationDataMicroMeter(vl53l0_dev, offset_calib);
-		filp_close(f, NULL);
-	} else {
-		vl53l0_errmsg("no offset calibration file exist!\n");
-	}
-
-	is_sign = 0;
-	f = filp_open("/proc/sensordata/ToF", O_RDONLY, 0);
-	if (f != NULL && !IS_ERR(f) && f->f_path.dentry != NULL) {
-		fs = get_fs();
-		set_fs(get_ds());
-		/* init the buffer with 0 */
-		for (i = 0; i < 8; i++)
-			buf[i] = 0;
 		f->f_op->llseek(f, 16, SEEK_SET);
 		f->f_op->read(f, buf, 8, &f->f_pos);
 		set_fs(fs);
-		vl53l0_dbgmsg("xtalk as:%s, buf[0]:%c\n", buf, buf[0]);
+		offset_calib = 0;
 		xtalk_calib = 0;
 		for (i = 0; i < 8; i++) {
 			if (i == 0 && buf[0] == '-')
 				is_sign = 1;
-			else if (buf[i] >= '0' && buf[i] <= '9')
+			else if (buf[i] >= '0' && buf[i] <= '9') {
+				offset_calib = offset_calib * 10 + (buf[i] - '0');
 				xtalk_calib = xtalk_calib * 10 + (buf[i] - '0');
-			else
+			} else
 				break;
 		}
-		if (is_sign == 1)
+		if (is_sign == 1) {
+			offset_calib = -offset_calib;
 			xtalk_calib = -xtalk_calib;
+		}
+		VL53L0_SetOffsetCalibrationDataMicroMeter(vl53l0_dev, offset_calib);
 		VL53L0_SetXTalkCompensationRateMegaCps(vl53l0_dev, xtalk_calib);
 		VL53L0_SetXTalkCompensationEnable(vl53l0_dev, 1);
 		filp_close(f, NULL);
 	} else {
-		vl53l0_errmsg("no xtalk calibration file exist!\n");
+		vl53l0_errmsg("no offset or xtalk calibration file exist!\n");
 	}
 }
 
