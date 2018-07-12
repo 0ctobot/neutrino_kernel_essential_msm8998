@@ -401,9 +401,6 @@ static void stmvl53l0_read_calibration_file(struct stmvl53l0_data *data)
 	if (f != NULL && !IS_ERR(f) && f->f_path.dentry != NULL) {
 		fs = get_fs();
 		set_fs(get_ds());
-		/* init the buffer with 0 */
-		for (i = 0; i < 8; i++)
-			buf[i] = 0;
 		f->f_op->llseek(f, 16, SEEK_SET);
 		f->f_op->read(f, buf, 8, &f->f_pos);
 		set_fs(fs);
