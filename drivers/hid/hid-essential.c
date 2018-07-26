@@ -72,6 +72,8 @@ static int mata_dongle_raw_event(struct hid_device *hid, struct hid_report *repo
 		/* switch speakers should not run in interrupt context */
 		queue_work(system_highpri_wq, &mdata->irq_work);
 		return 1;
+	} else if (report->id == 1) {
+		pr_info("%s: headphones button pressed", __func__);
 	} else
 		pr_err("%s: unknown event", __func__);
 
