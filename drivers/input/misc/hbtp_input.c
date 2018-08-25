@@ -42,6 +42,10 @@
 #define HBTP_HOLD_DURATION_US			(10)
 #define HBTP_PINCTRL_DDIC_SEQ_NUM		(4)
 
+#define EARLY_RESUME 0
+#define RESUME_MAIN 1
+#define SUSPEND 2
+
 struct hbtp_data {
 	struct platform_device *pdev;
 	struct input_dev *input_dev;
@@ -63,6 +67,7 @@ struct hbtp_data {
 	u32 ddic_pinctrl_seq_delay[HBTP_PINCTRL_DDIC_SEQ_NUM];
 	u32 fb_resume_seq_delay;
 	int lcd_state;
+	int state;
 	bool power_suspended;
 	bool power_sync_enabled;
 	bool power_sig_enabled;
@@ -70,6 +75,7 @@ struct hbtp_data {
 	struct completion power_suspend_sig;
 	struct regulator *vcc_ana;
 	struct regulator *vcc_dig;
+	struct work_struct pm_work;
 	int afe_load_ua;
 	int afe_vtg_min_uv;
 	int afe_vtg_max_uv;
@@ -102,9 +108,28 @@ static struct kobject *sensor_kobject;
 static int hbtp_fb_suspend(struct hbtp_data *ts);
 static int hbtp_fb_early_resume(struct hbtp_data *ts);
 static int hbtp_fb_resume(struct hbtp_data *ts);
-#endif
 
-#if defined(CONFIG_FB)
+static void hbtp_pm_worker(struct work_struct *work)
+{
+	struct hbtp_data *hbtp_data =
+	container_of(work, struct hbtp_data, pm_work);
+
+	switch (hbtp_data->state) {
+		case EARLY_RESUME:
+			pr_info("%s: EARLY_RESUME", __func__);
+			hbtp_fb_early_resume(hbtp_data);
+			break;
+		case RESUME_MAIN:
+			pr_info("%s: RESUME_MAIN", __func__);
+			hbtp_fb_resume(hbtp_data);
+			break;
+		case SUSPEND:
+			pr_info("%s: SUSPEND", __func__);
+			hbtp_fb_suspend(hbtp_data);
+			break;
+	}
+}
+
 static int fb_notifier_callback(struct notifier_block *self,
 				 unsigned long event, void *data)
 {
@@ -141,7 +166,8 @@ static int fb_notifier_callback(struct notifier_block *self,
 				lcd_state == FB_BLANK_POWERDOWN) {
 				pr_debug("%s: receives EARLY_BLANK:UNBLANK\n",
 					__func__);
-				hbtp_fb_early_resume(hbtp_data);
+				hbtp_data->state = EARLY_RESUME;
+				schedule_work(&hbtp_data->pm_work);
 			} else if (blank == FB_BLANK_POWERDOWN &&
 					lcd_state <= FB_BLANK_NORMAL) {
 				pr_debug("%s: receives EARLY_BLANK:POWERDOWN\n",
@@ -154,7 +180,8 @@ static int fb_notifier_callback(struct notifier_block *self,
 			if (blank <= FB_BLANK_NORMAL) {
 				pr_debug("%s: receives R_EARLY_BALNK:UNBLANK\n",
 					__func__);
-				hbtp_fb_suspend(hbtp_data);
+				hbtp_data->state = SUSPEND;
+				schedule_work(&hbtp_data->pm_work);
 			} else if (blank == FB_BLANK_POWERDOWN) {
 				pr_debug("%s: receives R_EARLY_BALNK:POWERDOWN\n",
 					__func__);
@@ -172,11 +199,13 @@ static int fb_notifier_callback(struct notifier_block *self,
 		if (blank == FB_BLANK_POWERDOWN &&
 			lcd_state <= FB_BLANK_NORMAL) {
 			pr_debug("%s: receives BLANK:POWERDOWN\n", __func__);
-			hbtp_fb_suspend(hbtp_data);
+			hbtp_data->state = SUSPEND;
+			schedule_work(&hbtp_data->pm_work);
 		} else if (blank <= FB_BLANK_NORMAL &&
 				lcd_state == FB_BLANK_POWERDOWN) {
 			pr_debug("%s: receives BLANK:UNBLANK\n", __func__);
-			hbtp_fb_resume(hbtp_data);
+			hbtp_data->state = RESUME_MAIN;
+			schedule_work(&hbtp_data->pm_work);
 		} else {
 			pr_debug("%s: receives BLANK:%d in %d state\n",
 				__func__, blank, lcd_state);
@@ -1475,6 +1504,7 @@ static int __init hbtp_init(void)
 	}
 
 #if defined(CONFIG_FB)
+	INIT_WORK(&hbtp->pm_work, hbtp_pm_worker);
 	hbtp->fb_notif.notifier_call = fb_notifier_callback;
 	error = fb_register_client(&hbtp->fb_notif);
 	if (error) {
