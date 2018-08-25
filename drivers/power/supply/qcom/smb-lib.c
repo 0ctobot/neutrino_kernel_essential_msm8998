@@ -2151,6 +2151,21 @@ int smblib_set_prop_dc_current_max(struct smb_charger *chg,
 	return rc;
 }
 
+int smblib_set_prop_dc_suspend(struct smb_charger *chg,
+				    const union power_supply_propval *val)
+{
+	int rc;
+
+	rc = vote(chg->dc_suspend_votable, BOOST_BACK_VOTER, (bool)val->intval, 0);
+	if (rc < 0) {
+		smblib_err(chg, "Couldn't vote to %s DC rc=%d\n",
+			(bool)val->intval ? "suspend" : "resume", rc);
+		return rc;
+	}
+	return rc;
+}
+
+
 /*******************
  * USB PSY GETTERS *
  *******************/
@@ -3629,7 +3644,7 @@ static void smblib_force_legacy_icl(struct smb_charger *chg, int pst)
 		vote(chg->usb_icl_votable, LEGACY_UNKNOWN_VOTER, false, 0);
 		break;
 	case POWER_SUPPLY_TYPE_USB_CDP:
-		vote(chg->usb_icl_votable, LEGACY_UNKNOWN_VOTER, true, 1500000);
+		vote(chg->usb_icl_votable, LEGACY_UNKNOWN_VOTER, true, 500000);
 		break;
 	case POWER_SUPPLY_TYPE_USB_DCP:
 		typec_mode = smblib_get_prop_typec_mode(chg);
@@ -4249,12 +4264,28 @@ irqreturn_t smblib_handle_usb_typec_change(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+irqreturn_t smblib_handle_dcin_uv(int irq, void *data)
+{
+	struct smb_irq_data *irq_data = data;
+	struct smb_charger *chg = irq_data->parent_data;
+	struct storm_watch *wdata;
+
+	smblib_dbg(chg, PR_INTERRUPT, "IRQ: %s\n", irq_data->name);
+	if (!chg->irq_info[SWITCH_POWER_OK_IRQ].irq_data)
+		return IRQ_HANDLED;
+
+	wdata = &chg->irq_info[SWITCH_POWER_OK_IRQ].irq_data->storm_data;
+	reset_storm_count(wdata);
+	return IRQ_HANDLED;
+}
+
 irqreturn_t smblib_handle_dc_plugin(int irq, void *data)
 {
 	struct smb_irq_data *irq_data = data;
 	struct smb_charger *chg = irq_data->parent_data;
 
 	power_supply_changed(chg->dc_psy);
+	vote(chg->dc_suspend_votable, BOOST_BACK_VOTER, false, 0);
 	return IRQ_HANDLED;
 }
 
@@ -4311,9 +4342,6 @@ irqreturn_t smblib_handle_switcher_power_ok(int irq, void *data)
 	if ((stat & USE_USBIN_BIT) && usb_icl >= 0 && usb_icl < USBIN_25MA)
 		return IRQ_HANDLED;
 
-	if (stat & USE_DCIN_BIT)
-		return IRQ_HANDLED;
-
 	if (is_storming(&irq_data->storm_data)) {
 		/* This could be a weak charger reduce ICL */
 		if (!is_client_vote_enabled(chg->usb_icl_votable,
@@ -4331,7 +4359,10 @@ irqreturn_t smblib_handle_switcher_power_ok(int irq, void *data)
 		} else {
 			smblib_err(chg,
 				"Reverse boost detected: voting 0mA to suspend input\n");
-			vote(chg->usb_icl_votable, BOOST_BACK_VOTER, true, 0);
+			if (stat & USE_USBIN_BIT)
+				vote(chg->usb_icl_votable, BOOST_BACK_VOTER, true, 0);
+			else
+				vote(chg->dc_suspend_votable, BOOST_BACK_VOTER, true, 0);
 			vote(chg->awake_votable, BOOST_BACK_VOTER, true, 0);
 			/*
 			 * Remove the boost-back vote after a delay, to avoid

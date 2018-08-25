@@ -860,6 +860,9 @@ static int smb2_dc_set_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
 		rc = smblib_set_prop_dc_current_max(chg, val);
 		break;
+	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
+		rc = smblib_set_prop_dc_suspend(chg, val);
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -2011,7 +2014,7 @@ static struct smb_irq_info smb2_irqs[] = {
 	},
 	[DCIN_UV_IRQ] = {
 		.name		= "dcin-uv",
-		.handler	= smblib_handle_debug,
+		.handler	= smblib_handle_dcin_uv,
 	},
 	[DCIN_OV_IRQ] = {
 		.name		= "dcin-ov",
