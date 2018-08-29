@@ -10,7 +10,7 @@
 #
 # Copyright (C) 1995-2001 by Russell King
 
-LDFLAGS_vmlinux	:=-p --no-undefined -X
+LDFLAGS_vmlinux	:=--no-undefined -X
 CPPFLAGS_vmlinux.lds = -DTEXT_OFFSET=$(TEXT_OFFSET)
 OBJCOPYFLAGS	:=-O binary -R .note -R .note.gnu.build-id -R .comment -S
 GZFLAGS		:=-9
@@ -24,6 +24,9 @@ KBUILD_DEFCONFIG := defconfig
 # Check for binutils support for specific extensions
 lseinstr := $(call as-instr,.arch_extension lse,-DCONFIG_AS_LSE=1)
 
+KBUILD_CFLAGS	+= $(call cc-option,-march=armv8-a+crypto+crc,) \
+	$(call cc-option,-mcpu=cortex-a53+crypto+crc,)
+
 ifeq ($(CONFIG_ARM64_LSE_ATOMICS), y)
   ifeq ($(lseinstr),)
 $(warning LSE atomics not supported by binutils)
@@ -31,13 +34,19 @@ $(warning LSE atomics not supported by binutils)
 endif
 
 ifeq ($(cc-name),clang)
-# This is a workaround for https://bugs.llvm.org/show_bug.cgi?id=30792.
-# TODO: revert when this is fixed in LLVM.
-KBUILD_CFLAGS	+= -mno-implicit-float
-else
-KBUILD_CFLAGS	+= -mgeneral-regs-only
+KBUILD_CFLAGS	+= -mllvm -polly \
+					-mllvm -polly-run-dce \
+					-mllvm -polly-run-inliner \
+					-mllvm -polly-opt-fusion=max \
+					-mllvm -polly-ast-use-context \
+					-mllvm -polly-parallel -lgomp \
+					-mllvm -polly-vectorizer=stripmine \
+					-mllvm -polly-detect-keep-going
+
+KBUILD_CFLAGS	+= -O3
+KBUILD_CFLAGS	+= -DCONFIG_ARCH_SUPPORTS_INT128
 endif
-KBUILD_CFLAGS	+= $(lseinstr)
+KBUILD_CFLAGS	+= -mgeneral-regs-only $(lseinstr)
 KBUILD_CFLAGS	+= -fno-pic
 KBUILD_CFLAGS	+= $(call cc-option, -mpc-relative-literal-loads)
 KBUILD_CFLAGS	+= -fno-asynchronous-unwind-tables
