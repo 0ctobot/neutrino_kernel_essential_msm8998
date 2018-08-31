@@ -37,6 +37,8 @@
 
 #define HBTP_INPUT_NAME			"hbtp_input"
 #define DISP_COORDS_SIZE		2
+#undef HBTP_MAX_FINGER
+#define HBTP_MAX_FINGER 10
 
 #define HBTP_PINCTRL_VALID_STATE_CNT		(2)
 #define HBTP_HOLD_DURATION_US			(10)
