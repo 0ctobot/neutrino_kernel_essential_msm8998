@@ -978,7 +978,7 @@ static int clk_osm_get_lut(struct platform_device *pdev,
 
 	num_rows = total_elems / NUM_FIELDS;
 
-	fmax_temp = devm_kzalloc(&pdev->dev, num_rows * sizeof(unsigned long),
+	fmax_temp = devm_kcalloc(&pdev->dev, num_rows, sizeof(unsigned long),
 				 GFP_KERNEL);
 	if (!fmax_temp)
 		return -ENOMEM;
@@ -1030,7 +1030,7 @@ static int clk_osm_get_lut(struct platform_device *pdev,
 	}
 
 	fmax_temp[k++] = abs_fmax;
-	clk->fmax = devm_kzalloc(&pdev->dev, k * sizeof(unsigned long),
+	clk->fmax = devm_kcalloc(&pdev->dev, k, sizeof(unsigned long),
 				 GFP_KERNEL);
 	if (!clk->fmax) {
 		rc = -ENOMEM;
@@ -1053,7 +1053,7 @@ static int clk_osm_parse_dt_configs(struct platform_device *pdev)
 	u32 *array;
 	int i, rc = 0;
 
-	array = devm_kzalloc(&pdev->dev, MAX_CLUSTER_CNT * sizeof(u32),
+	array = devm_kcalloc(&pdev->dev, MAX_CLUSTER_CNT, sizeof(u32),
 			     GFP_KERNEL);
 	if (!array)
 		return -ENOMEM;
@@ -1805,7 +1805,7 @@ static int clk_osm_set_cc_policy(struct platform_device *pdev)
 	u32 *array;
 	struct device_node *of = pdev->dev.of_node;
 
-	array = devm_kzalloc(&pdev->dev, MAX_CLUSTER_CNT * sizeof(u32),
+	array = devm_kcalloc(&pdev->dev, MAX_CLUSTER_CNT, sizeof(u32),
 			     GFP_KERNEL);
 	if (!array)
 		return -ENOMEM;
@@ -1916,7 +1916,7 @@ static int clk_osm_set_llm_freq_policy(struct platform_device *pdev)
 	u32 *array;
 	int rc = 0, val, regval;
 
-	array = devm_kzalloc(&pdev->dev, MAX_CLUSTER_CNT * sizeof(u32),
+	array = devm_kcalloc(&pdev->dev, MAX_CLUSTER_CNT, sizeof(u32),
 			     GFP_KERNEL);
 	if (!array)
 		return -ENOMEM;
@@ -1991,7 +1991,7 @@ static int clk_osm_set_llm_volt_policy(struct platform_device *pdev)
 	u32 *array;
 	int rc = 0, val, regval;
 
-	array = devm_kzalloc(&pdev->dev, MAX_CLUSTER_CNT * sizeof(u32),
+	array = devm_kcalloc(&pdev->dev, MAX_CLUSTER_CNT, sizeof(u32),
 			     GFP_KERNEL);
 	if (!array)
 		return -ENOMEM;
