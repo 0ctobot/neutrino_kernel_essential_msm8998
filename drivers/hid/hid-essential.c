@@ -85,7 +85,7 @@ static int mata_dongle_raw_event(struct hid_device *hid, struct hid_report *repo
 
 static int mata_dongle_probe(struct hid_device *hid, const struct hid_device_id *id)
 {
-	int ret = 0;
+	int ret;
 	struct mata_dongle_dev *data = NULL;
 
 	data = devm_kzalloc(&hid->dev, sizeof(struct mata_dongle_dev), GFP_KERNEL);
@@ -117,7 +117,7 @@ static int mata_dongle_probe(struct hid_device *hid, const struct hid_device_id 
 
 	return 0;
 err_free:
-	return ret;
+	return -ENODEV;
 }
 
 static void mata_dongle_remove(struct hid_device *hid)
