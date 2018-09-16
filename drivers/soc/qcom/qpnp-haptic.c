@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2015, 2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -355,6 +355,8 @@ struct qpnp_hap {
 	struct mutex			lock;
 	struct mutex			wf_lock;
 	spinlock_t			bus_lock;
+	spinlock_t			td_lock;
+	struct work_struct		td_work;
 	struct completion		completion;
 	enum qpnp_hap_mode		play_mode;
 	u32				misc_clk_trim_error_reg;
@@ -402,6 +404,7 @@ struct qpnp_hap {
 	bool				auto_mode;
 	bool				override_auto_mode_config;
 	bool				play_irq_en;
+	int				td_time_ms;
 };
 
 static struct qpnp_hap *ghap;
@@ -2227,65 +2230,68 @@ static int qpnp_hap_auto_mode_config(struct qpnp_hap *hap, int time_ms)
 	return 0;
 }
 
-/* enable interface from timed output class */
-static void qpnp_hap_td_enable(struct timed_output_dev *dev, int time_ms)
+static void qpnp_timed_enable_worker(struct work_struct *work)
 {
-	struct qpnp_hap *hap = container_of(dev, struct qpnp_hap,
-					 timed_dev);
-	bool state = !!time_ms;
-	ktime_t rem;
-	int rc;
+	struct qpnp_hap *hap = container_of(work, struct qpnp_hap,
+					 td_work);
+	int rc, time_ms;
+
+	spin_lock(&hap->td_lock);
+	time_ms = hap->td_time_ms;
+	spin_unlock(&hap->td_lock);
 
 	if (time_ms < 0)
 		return;
 
 	mutex_lock(&hap->lock);
 
-	if (hap->state == state) {
-		if (state) {
-			rem = hrtimer_get_remaining(&hap->hap_timer);
-			if (time_ms > ktime_to_ms(rem)) {
-				time_ms = (time_ms > hap->timeout_ms ?
-						 hap->timeout_ms : time_ms);
-				hrtimer_cancel(&hap->hap_timer);
-				hap->play_time_ms = time_ms;
-				hrtimer_start(&hap->hap_timer,
-						ktime_set(time_ms / 1000,
-						(time_ms % 1000) * 1000000),
-						HRTIMER_MODE_REL);
-			}
-		}
+	if (time_ms == 0) {
+		/* disable haptics */
+		hrtimer_cancel(&hap->hap_timer);
+		hap->state = 0;
+		schedule_work(&hap->work);
 		mutex_unlock(&hap->lock);
 		return;
 	}
 
-	hap->state = state;
-	if (!hap->state) {
-		hrtimer_cancel(&hap->hap_timer);
-	} else {
-		if (time_ms < 10)
-			time_ms = 10;
+	if (time_ms < 10)
+		time_ms = 10;
 
-		if (hap->auto_mode) {
-			rc = qpnp_hap_auto_mode_config(hap, time_ms);
-			if (rc < 0) {
-				pr_err("Unable to do auto mode config\n");
-				mutex_unlock(&hap->lock);
-				return;
-			}
+	if (is_sw_lra_auto_resonance_control(hap))
+		hrtimer_cancel(&hap->auto_res_err_poll_timer);
+
+	hrtimer_cancel(&hap->hap_timer);
+
+	if (hap->auto_mode) {
+		rc = qpnp_hap_auto_mode_config(hap, time_ms);
+		if (rc < 0) {
+			pr_err("Unable to do auto mode config\n");
+			mutex_unlock(&hap->lock);
+			return;
 		}
-
-		time_ms = (time_ms > hap->timeout_ms ?
-				 hap->timeout_ms : time_ms);
-		hap->play_time_ms = time_ms;
-		hrtimer_start(&hap->hap_timer,
-				ktime_set(time_ms / 1000,
-				(time_ms % 1000) * 1000000),
-				HRTIMER_MODE_REL);
 	}
 
+	time_ms = (time_ms > hap->timeout_ms ? hap->timeout_ms : time_ms);
+	hap->play_time_ms = time_ms;
+	hap->state = 1;
+	hrtimer_start(&hap->hap_timer,
+		ktime_set(time_ms / 1000, (time_ms % 1000) * 1000000),
+		HRTIMER_MODE_REL);
 	mutex_unlock(&hap->lock);
 	schedule_work(&hap->work);
+}
+
+/* enable interface from timed output class */
+static void qpnp_hap_td_enable(struct timed_output_dev *dev, int time_ms)
+{
+	struct qpnp_hap *hap = container_of(dev, struct qpnp_hap,
+					 timed_dev);
+
+	spin_lock(&hap->td_lock);
+	hap->td_time_ms = time_ms;
+	spin_unlock(&hap->td_lock);
+
+	schedule_work(&hap->td_work);
 }
 
 /* play pwm bytes */
@@ -3025,9 +3031,11 @@ static int qpnp_haptic_probe(struct platform_device *pdev)
 
 	mutex_init(&hap->lock);
 	mutex_init(&hap->wf_lock);
+	spin_lock_init(&hap->td_lock);
 	INIT_WORK(&hap->work, qpnp_hap_worker);
 	INIT_DELAYED_WORK(&hap->sc_work, qpnp_handle_sc_irq);
 	init_completion(&hap->completion);
+	INIT_WORK(&hap->td_work, qpnp_timed_enable_worker);
 
 	hrtimer_init(&hap->hap_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	hap->hap_timer.function = qpnp_hap_timer;
