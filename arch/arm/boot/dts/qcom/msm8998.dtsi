@@ -282,6 +282,7 @@
 		energy-costs {
 			CPU_COST_0: core-cost0 {
 				busy-cost-data = <
+					56  7
 					65  11
 					80  20
 					96  25
@@ -304,7 +305,7 @@
 					384 155
 					401 178
 					419 201
-				>;
+ 				>;
 				idle-cost-data = <
 					4 4 0 0
 				>;
@@ -349,6 +350,7 @@
 			};
 			CLUSTER_COST_0: cluster-cost0 {
 				busy-cost-data = <
+					68  16
 					65  17
 					80  18
 					96  18
@@ -3113,7 +3115,7 @@
 		reg = <0x780000 0x1000>;
 		qcom,low-hyst-temp = <100>;
 		qcom,high-hyst-temp = <100>;
-		qcom,polling-interval = <50>;
+		qcom,polling-interval = <100>;
 
 		ea0: ea0 {
 			sensor = <&sensor_information1>;
