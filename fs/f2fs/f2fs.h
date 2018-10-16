@@ -1004,6 +1004,9 @@ enum count_type {
 	F2FS_DIRTY_IMETA,
 	F2FS_WB_CP_DATA,
 	F2FS_WB_DATA,
+	F2FS_RD_DATA,
+	F2FS_RD_NODE,
+	F2FS_RD_META,
 	NR_COUNT_TYPE,
 };
 
@@ -1414,18 +1417,6 @@ static inline bool f2fs_time_over(struct f2fs_sb_info *sbi, int type)
 	return time_after(jiffies, sbi->last_time[type] + interval);
 }
 
-static inline bool is_idle(struct f2fs_sb_info *sbi)
-{
-	struct block_device *bdev = sbi->sb->s_bdev;
-	struct request_queue *q = bdev_get_queue(bdev);
-	struct request_list *rl = &q->root_rl;
-
-	if (rl->count[BLK_RW_SYNC] || rl->count[BLK_RW_ASYNC])
-		return false;
-
-	return f2fs_time_over(sbi, REQ_TIME);
-}
-
 /*
  * Inline functions
  */
@@ -1815,7 +1806,9 @@ static inline void inc_page_count(struct f2fs_sb_info *sbi, int count_type)
 	atomic_inc(&sbi->nr_pages[count_type]);
 
 	if (count_type == F2FS_DIRTY_DATA || count_type == F2FS_INMEM_PAGES ||
-		count_type == F2FS_WB_CP_DATA || count_type == F2FS_WB_DATA)
+		count_type == F2FS_WB_CP_DATA || count_type == F2FS_WB_DATA ||
+		count_type == F2FS_RD_DATA || count_type == F2FS_RD_NODE ||
+		count_type == F2FS_RD_META)
 		return;
 
 	set_sbi_flag(sbi, SBI_IS_DIRTY);
@@ -2148,6 +2141,22 @@ static inline struct bio *f2fs_bio_alloc(struct f2fs_sb_info *sbi,
 	}
 
 	return bio_alloc(GFP_KERNEL, npages);
+}
+
+static inline bool is_idle(struct f2fs_sb_info *sbi, int type)
+{
+        struct block_device *bdev = sbi->sb->s_bdev;
+        struct request_queue *q = bdev_get_queue(bdev);
+        struct request_list *rl = &q->root_rl;
+
+        if (rl->count[BLK_RW_SYNC] || rl->count[BLK_RW_ASYNC])
+                return false;
+
+	if (get_pages(sbi, F2FS_RD_DATA) || get_pages(sbi, F2FS_RD_NODE) ||
+		get_pages(sbi, F2FS_RD_META) || get_pages(sbi, F2FS_WB_DATA) ||
+		get_pages(sbi, F2FS_WB_CP_DATA))
+		return false;
+	return f2fs_time_over(sbi, type);
 }
 
 static inline void f2fs_radix_tree_insert(struct radix_tree_root *root,
@@ -3157,6 +3166,7 @@ struct f2fs_stat_info {
 	int free_nids, avail_nids, alloc_nids;
 	int total_count, utilization;
 	int bg_gc, nr_wb_cp_data, nr_wb_data;
+	int nr_rd_data, nr_rd_node, nr_rd_meta;
 	int nr_flushing, nr_flushed, flush_list_empty;
 	int nr_discarding, nr_discarded;
 	int nr_discard_cmd;
