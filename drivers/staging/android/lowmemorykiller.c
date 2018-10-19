@@ -49,6 +49,10 @@
 #include <linux/cpuset.h>
 #include <linux/vmpressure.h>
 #include <linux/zcache.h>
+#include <linux/cpu_input_boost.h>
+#include <linux/devfreq_boost.h>
+
+#define BOOST_DURATION_MS (250)
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/almk.h>
@@ -62,7 +66,9 @@
 #define CREATE_TRACE_POINTS
 #include "trace/lowmemorykiller.h"
 
-static uint32_t lowmem_debug_level = 1;
+extern int extra_free_kbytes;
+
+static uint32_t lowmem_debug_level = 0;
 static short lowmem_adj[6] = {
 	0,
 	1,
@@ -441,7 +447,8 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 	if (lowmem_minfree_size < array_size)
 		array_size = lowmem_minfree_size;
 	for (i = 0; i < array_size; i++) {
-		minfree = lowmem_minfree[i];
+		minfree = lowmem_minfree[i] +
+			  ((extra_free_kbytes * 1024) / PAGE_SIZE);
 		if (other_free < minfree && other_file < minfree) {
 			min_score_adj = lowmem_adj[i];
 			break;
@@ -464,6 +471,8 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 
 	selected_oom_score_adj = min_score_adj;
 
+	cpu_input_boost_kick_max(BOOST_DURATION_MS);
+	devfreq_boost_kick_max(DEVFREQ_MSM_CPUBW, BOOST_DURATION_MS);
 	rcu_read_lock();
 	for_each_process(tsk) {
 		struct task_struct *p;
@@ -525,13 +534,8 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 
 		task_lock(selected);
 		send_sig(SIGKILL, selected, 0);
-		/*
-		 * FIXME: lowmemorykiller shouldn't abuse global OOM killer
-		 * infrastructure. There is no real reason why the selected
-		 * task should have access to the memory reserves.
-		 */
 		if (selected->mm)
-			mark_oom_victim(selected);
+			task_set_lmk_waiting(selected);
 		task_unlock(selected);
 		cache_size = other_file * (long)(PAGE_SIZE / 1024);
 		cache_limit = minfree * (long)(PAGE_SIZE / 1024);
