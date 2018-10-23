@@ -24,7 +24,6 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/threads.h>
-#include <linux/overflow.h>
 
 #define UID_HASH_BITS 10
 
@@ -367,7 +366,8 @@ void cpufreq_times_create_policy(struct cpufreq_policy *policy)
 	cpufreq_for_each_entry(pos, table)
 		count++;
 
-	tmp =  kzalloc(struct_size(freqs, freq_table, count), GFP_KERNEL);
+	tmp =  kzalloc(sizeof(*freqs) + sizeof(freqs->freq_table[0]) * count,
+		       GFP_KERNEL);
 	if (!tmp)
 		return;
 

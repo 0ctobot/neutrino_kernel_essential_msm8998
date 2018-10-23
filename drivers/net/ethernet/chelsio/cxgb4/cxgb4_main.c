@@ -878,7 +878,7 @@ int cxgb4_write_rss(const struct port_info *pi, const u16 *queues)
 	const struct sge_eth_rxq *rxq;
 
 	rxq = &adapter->sge.ethrxq[pi->first_qset];
-	rss = kmalloc_array(pi->rss_size, sizeof(u16), GFP_KERNEL);
+	rss = kmalloc(pi->rss_size * sizeof(u16), GFP_KERNEL);
 	if (!rss)
 		return -ENOMEM;
 
@@ -1704,7 +1704,7 @@ static int tid_init(struct tid_info *t)
 	       t->nftids * sizeof(*t->ftid_tab) +
 	       t->nsftids * sizeof(*t->ftid_tab);
 
-	t->tid_tab = t4_alloc_mem(size);
+	t->tid_tab = kvzalloc(size, GFP_KERNEL);
 	if (!t->tid_tab)
 		return -ENOMEM;
 
@@ -3748,7 +3748,7 @@ static int adap_init0(struct adapter *adap)
 		/* allocate memory to read the header of the firmware on the
 		 * card
 		 */
-		card_fw = t4_alloc_mem(sizeof(*card_fw));
+		card_fw = kvzalloc(sizeof(*card_fw), GFP_KERNEL);
 
 		/* Get FW from from /lib/firmware/ */
 		ret = request_firmware(&fw, fw_info->fw_mod_name,
@@ -3768,7 +3768,7 @@ static int adap_init0(struct adapter *adap)
 
 		/* Cleaning up */
 		release_firmware(fw);
-		t4_free_mem(card_fw);
+		kvfree(card_fw);
 
 		if (ret < 0)
 			goto bye;
@@ -4459,8 +4459,8 @@ static int enable_msix(struct adapter *adap)
 	unsigned int nchan = adap->params.nports;
 	struct msix_entry *entries;
 
-	entries = kmalloc_array(MAX_INGQ + 1, sizeof(*entries),
-				GFP_KERNEL);
+	entries = kmalloc(sizeof(*entries) * (MAX_INGQ + 1),
+			  GFP_KERNEL);
 	if (!entries)
 		return -ENOMEM;
 
