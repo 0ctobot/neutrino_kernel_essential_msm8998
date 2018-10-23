@@ -21,7 +21,6 @@
 #include <linux/resource.h>
 #include <linux/page_ext.h>
 #include <linux/err.h>
-#include <linux/overflow.h>
 
 struct mempolicy;
 struct anon_vma;
@@ -430,17 +429,10 @@ static inline void *kvzalloc(size_t size, gfp_t flags)
 
 static inline void *kvmalloc_array(size_t n, size_t size, gfp_t flags)
 {
-	size_t bytes;
-
-	if (unlikely(check_mul_overflow(n, size, &bytes)))
+	if (size != 0 && n > SIZE_MAX / size)
 		return NULL;
 
-	return kvmalloc(bytes, flags);
-}
-
-static inline void *kvcalloc(size_t n, size_t size, gfp_t flags)
-{
-	return kvmalloc_array(n, size, flags | __GFP_ZERO);
+	return kvmalloc(n * size, flags);
 }
 
 extern void kvfree(const void *addr);
@@ -459,6 +451,14 @@ static inline void compound_unlock(struct page *page)
 	VM_BUG_ON_PAGE(PageSlab(page), page);
 	bit_spin_unlock(PG_compound_lock, &page->flags);
 #endif
+}
+
+static inline void *kvmalloc_array(size_t n, size_t size, gfp_t flags)
+{
+	if (size != 0 && n > SIZE_MAX / size)
+		return NULL;
+
+	return kvmalloc(n * size, flags);
 }
 
 static inline unsigned long compound_lock_irqsave(struct page *page)
