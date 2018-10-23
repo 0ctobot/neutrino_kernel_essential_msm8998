@@ -188,7 +188,6 @@ struct dwc3_msm {
 	struct work_struct	restart_usb_work;
 	bool			in_restart;
 	struct workqueue_struct *dwc3_wq;
-	struct workqueue_struct *sm_usb_wq;
 	struct delayed_work	sm_work;
 	unsigned long		inputs;
 	unsigned		max_power;
@@ -1598,7 +1597,7 @@ static int msm_dwc3_usbdev_notify(struct notifier_block *self,
 	}
 
 	mdwc->hc_died = true;
-	queue_delayed_work(mdwc->sm_usb_wq, &mdwc->sm_work, 0);
+	queue_delayed_work(system_freezable_wq, &mdwc->sm_work, 0);
 	return 0;
 }
 
@@ -2355,11 +2354,10 @@ static void dwc3_ext_event_notify(struct dwc3_msm *mdwc)
 	}
 
 	pm_stay_awake(mdwc->dev);
-	queue_delayed_work(mdwc->sm_usb_wq, &mdwc->sm_work, 0);
+	queue_delayed_work(system_freezable_wq, &mdwc->sm_work, 0);
 }
 
-static void dwc3_resume_work(struct work_struct *w)
-{
+static void dwc3_resume_work(struct work_struct *w) {
 	struct dwc3_msm *mdwc = container_of(w, struct dwc3_msm, resume_work);
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 
@@ -2949,12 +2947,6 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&mdwc->perf_vote_work, msm_dwc3_perf_vote_work);
 	INIT_DELAYED_WORK(&mdwc->sdp_check, check_for_sdp_connection);
 
-	mdwc->sm_usb_wq = create_freezable_workqueue("k_sm_usb");
-	if (!mdwc->sm_usb_wq) {
-		pr_err("%s: Failed to create workqueue for sm_usb\n", __func__);
-		return -ENOMEM;
-	}
-
 	mdwc->dwc3_wq = alloc_ordered_workqueue("dwc3_wq", 0);
 	if (!mdwc->dwc3_wq) {
 		pr_err("%s: Unable to create workqueue dwc3_wq\n", __func__);
@@ -3259,7 +3251,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		dwc3_msm_id_notifier(&mdwc->id_nb, true, mdwc->extcon_id);
 	else if (!pval.intval) {
 		/* USB cable is not connected */
-		queue_delayed_work(mdwc->sm_usb_wq, &mdwc->sm_work, 0);
+		queue_delayed_work(system_freezable_wq, &mdwc->sm_work, 0);
 	} else {
 		if (pval.intval > 0)
 			dev_info(mdwc->dev, "charger detection in progress\n");
@@ -3366,37 +3358,6 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static bool dwc3_device_has_audio_interface(struct usb_device *udev,
-											struct dwc3_msm *mdwc)
-{
-	struct usb_host_config *conf;
-	int num_configs = udev->descriptor.bNumConfigurations;
-	int i, j, k;
-	struct usb_interface *intf;
-	struct usb_host_interface *altsetting;
-	for (i = 0, conf = udev->config; i < num_configs && conf;
-		(i++, conf++)) {
-		for (j = 0; j < USB_MAXINTERFACES; j++) {
-			intf = conf->interface[j];
-			if (!intf)
-				break;
-			for (k = 0, altsetting = intf->altsetting;
-				k < intf->num_altsetting && altsetting;
-				k++, altsetting++) {
-				if (altsetting->desc.bInterfaceClass
-					== USB_CLASS_AUDIO) {
-					dev_info(&udev->dev,
-						"Audio interface found");
-					pm_stay_awake(mdwc->dev);
-					return true;
-				}
-			}
-		}
-	}
-	pm_relax(mdwc->dev);
-	return false;
-}
-
 static int dwc3_msm_host_notifier(struct notifier_block *nb,
 	unsigned long event, void *ptr)
 {
@@ -3414,8 +3375,6 @@ static int dwc3_msm_host_notifier(struct notifier_block *nb,
 		if (!mdwc->usb_psy)
 			return NOTIFY_DONE;
 	}
-
-	dwc3_device_has_audio_interface(udev, mdwc);
 
 	/*
 	 * For direct-attach devices, new udev is direct child of root hub
@@ -3912,7 +3871,6 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 			break;
 		} else {
 			dwc3_msm_gadget_vbus_draw(mdwc, 0);
-			pm_relax(mdwc->dev);
 			dev_dbg(mdwc->dev, "Cable disconnected\n");
 		}
 		break;
@@ -4026,7 +3984,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 	}
 
 	if (work)
-		queue_delayed_work(mdwc->sm_usb_wq, &mdwc->sm_work, delay);
+		queue_delayed_work(system_freezable_wq, &mdwc->sm_work, delay);
 
 ret:
 	return;
@@ -4131,7 +4089,9 @@ static int dwc3_msm_pm_resume(struct device *dev)
 	if (mdwc->no_wakeup_src_in_hostmode && !test_bit(ID, &mdwc->inputs))
 		dwc3_msm_resume(mdwc);
 
-	queue_work(mdwc->dwc3_wq, &mdwc->resume_work);
+	/* kick in otg state machine */
+	if (mdwc->vbus_active || !mdwc->id_state)
+		queue_work(mdwc->dwc3_wq, &mdwc->resume_work);
 
 	return 0;
 }
