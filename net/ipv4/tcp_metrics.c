@@ -1148,7 +1148,10 @@ static int __net_init tcp_net_metrics_init(struct net *net)
 	tcp_metrics_hash_log = order_base_2(slots);
 	size = sizeof(struct tcpm_hash_bucket) << tcp_metrics_hash_log;
 
-	tcp_metrics_hash = kvzalloc(size, GFP_KERNEL);
+	tcp_metrics_hash = kzalloc(size, GFP_KERNEL | __GFP_NOWARN);
+	if (!tcp_metrics_hash)
+		tcp_metrics_hash = vzalloc(size);
+
 	if (!tcp_metrics_hash)
 		return -ENOMEM;
 
