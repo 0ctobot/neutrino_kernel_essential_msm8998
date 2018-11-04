@@ -485,6 +485,9 @@ static inline bool __has_cursum_space(struct f2fs_journal *journal,
 #define F2FS_IOC32_GETVERSION		FS_IOC32_GETVERSION
 #endif
 
+#define F2FS_IOC_FSGETXATTR		FS_IOC_FSGETXATTR
+#define F2FS_IOC_FSSETXATTR		FS_IOC_FSSETXATTR
+
 struct f2fs_gc_range {
 	u32 sync;
 	u64 start;
@@ -587,6 +590,9 @@ enum {
 
 #define DEFAULT_RETRY_IO_COUNT	8	/* maximum retry read IO count */
 
+/* maximum retry quota flush count */
+#define DEFAULT_RETRY_QUOTA_FLUSH_COUNT		8
+
 #define F2FS_LINK_MAX	0xffffffff	/* maximum link count per file */
 
 #define MAX_DIR_RA_PAGES	4	/* maximum ra pages of dir */
@@ -660,6 +666,7 @@ enum {
 	F2FS_GET_BLOCK_DEFAULT,
 	F2FS_GET_BLOCK_FIEMAP,
 	F2FS_GET_BLOCK_BMAP,
+	F2FS_GET_BLOCK_DIO,
 	F2FS_GET_BLOCK_PRE_DIO,
 	F2FS_GET_BLOCK_PRE_AIO,
 	F2FS_GET_BLOCK_PRECACHE,
@@ -1004,6 +1011,9 @@ enum count_type {
 	F2FS_DIRTY_IMETA,
 	F2FS_WB_CP_DATA,
 	F2FS_WB_DATA,
+	F2FS_RD_DATA,
+	F2FS_RD_NODE,
+	F2FS_RD_META,
 	NR_COUNT_TYPE,
 };
 
@@ -1148,11 +1158,16 @@ enum {
 	SBI_NEED_SB_WRITE,			/* need to recover superblock */
 	SBI_NEED_CP,				/* need to checkpoint */
 	SBI_IS_SHUTDOWN,			/* shutdown by ioctl */
+	SBI_QUOTA_NEED_FLUSH,			/* need to flush quota info in CP */
+	SBI_QUOTA_SKIP_FLUSH,			/* skip flushing quota in current CP */
+	SBI_QUOTA_NEED_REPAIR,			/* quota file may be corrupted */
 };
 
 enum {
 	CP_TIME,
 	REQ_TIME,
+	DISCARD_TIME,
+	GC_TIME,
 	MAX_TIME,
 };
 
@@ -1404,7 +1419,15 @@ static inline bool time_to_inject(struct f2fs_sb_info *sbi, int type)
 
 static inline void f2fs_update_time(struct f2fs_sb_info *sbi, int type)
 {
-	sbi->last_time[type] = jiffies;
+	unsigned long now = jiffies;
+
+	sbi->last_time[type] = now;
+
+	/* DISCARD_TIME and GC_TIME are based on REQ_TIME */
+	if (type == REQ_TIME) {
+		sbi->last_time[DISCARD_TIME] = now;
+		sbi->last_time[GC_TIME] = now;
+	}
 }
 
 static inline bool f2fs_time_over(struct f2fs_sb_info *sbi, int type)
@@ -1414,16 +1437,18 @@ static inline bool f2fs_time_over(struct f2fs_sb_info *sbi, int type)
 	return time_after(jiffies, sbi->last_time[type] + interval);
 }
 
-static inline bool is_idle(struct f2fs_sb_info *sbi)
+static inline unsigned int f2fs_time_to_wait(struct f2fs_sb_info *sbi,
+						int type)
 {
-	struct block_device *bdev = sbi->sb->s_bdev;
-	struct request_queue *q = bdev_get_queue(bdev);
-	struct request_list *rl = &q->root_rl;
+	unsigned long interval = sbi->interval_time[type] * HZ;
+	unsigned int wait_ms = 0;
+	long delta;
 
-	if (rl->count[BLK_RW_SYNC] || rl->count[BLK_RW_ASYNC])
-		return false;
+	delta = (sbi->last_time[type] + interval) - jiffies;
+	if (delta > 0)
+		wait_ms = jiffies_to_msecs(delta);
 
-	return f2fs_time_over(sbi, REQ_TIME);
+	return wait_ms;
 }
 
 /*
@@ -1815,7 +1840,9 @@ static inline void inc_page_count(struct f2fs_sb_info *sbi, int count_type)
 	atomic_inc(&sbi->nr_pages[count_type]);
 
 	if (count_type == F2FS_DIRTY_DATA || count_type == F2FS_INMEM_PAGES ||
-		count_type == F2FS_WB_CP_DATA || count_type == F2FS_WB_DATA)
+		count_type == F2FS_WB_CP_DATA || count_type == F2FS_WB_DATA ||
+		count_type == F2FS_RD_DATA || count_type == F2FS_RD_NODE ||
+		count_type == F2FS_RD_META)
 		return;
 
 	set_sbi_flag(sbi, SBI_IS_DIRTY);
@@ -1951,12 +1978,18 @@ static inline int inc_valid_node_count(struct f2fs_sb_info *sbi,
 {
 	block_t	valid_block_count;
 	unsigned int valid_node_count;
-	bool quota = inode && !is_inode;
+	int err;
 
-	if (quota) {
-		int ret = dquot_reserve_block(inode, 1);
-		if (ret)
-			return ret;
+	if (is_inode) {
+		if (inode) {
+			err = dquot_alloc_inode(inode);
+			if (err)
+				return err;
+		}
+	} else {
+		err = dquot_reserve_block(inode, 1);
+		if (err)
+			return err;
 	}
 
 	if (time_to_inject(sbi, FAULT_BLOCK)) {
@@ -1998,8 +2031,12 @@ static inline int inc_valid_node_count(struct f2fs_sb_info *sbi,
 	return 0;
 
 enospc:
-	if (quota)
+	if (is_inode) {
+		if (inode)
+			dquot_free_inode(inode);
+	} else {
 		dquot_release_reservation_block(inode, 1);
+	}
 	return -ENOSPC;
 }
 
@@ -2020,7 +2057,9 @@ static inline void dec_valid_node_count(struct f2fs_sb_info *sbi,
 
 	spin_unlock(&sbi->stat_lock);
 
-	if (!is_inode)
+	if (is_inode)
+		dquot_free_inode(inode);
+	else
 		f2fs_i_blocks_write(inode, 1, false, true);
 }
 
@@ -2148,6 +2187,22 @@ static inline struct bio *f2fs_bio_alloc(struct f2fs_sb_info *sbi,
 	}
 
 	return bio_alloc(GFP_KERNEL, npages);
+}
+
+static inline bool is_idle(struct f2fs_sb_info *sbi, int type)
+{
+        struct block_device *bdev = sbi->sb->s_bdev;
+        struct request_queue *q = bdev_get_queue(bdev);
+        struct request_list *rl = &q->root_rl;
+
+        if (rl->count[BLK_RW_SYNC] || rl->count[BLK_RW_ASYNC])
+                return false;
+
+	if (get_pages(sbi, F2FS_RD_DATA) || get_pages(sbi, F2FS_RD_NODE) ||
+		get_pages(sbi, F2FS_RD_META) || get_pages(sbi, F2FS_WB_DATA) ||
+		get_pages(sbi, F2FS_WB_CP_DATA))
+		return false;
+	return f2fs_time_over(sbi, type);
 }
 
 static inline void f2fs_radix_tree_insert(struct radix_tree_root *root,
@@ -2819,7 +2874,8 @@ static inline bool is_valid_data_blkaddr(struct f2fs_sb_info *sbi,
  */
 int f2fs_sync_file(struct file *file, loff_t start, loff_t end, int datasync);
 void f2fs_truncate_data_blocks(struct dnode_of_data *dn);
-int f2fs_truncate_blocks(struct inode *inode, u64 from, bool lock);
+int f2fs_truncate_blocks(struct inode *inode, u64 from, bool lock,
+							bool buf_write);
 int f2fs_truncate(struct inode *inode);
 int f2fs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 			struct kstat *stat);
@@ -2829,6 +2885,7 @@ void f2fs_truncate_data_blocks_range(struct dnode_of_data *dn, int count);
 int f2fs_precache_extents(struct inode *inode);
 long f2fs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 long f2fs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+int f2fs_transfer_project_quota(struct inode *inode, kprojid_t kprojid);
 int f2fs_pin_file_control(struct inode *inode, bool inc);
 
 /*
@@ -2907,6 +2964,7 @@ static inline int f2fs_add_link(struct dentry *dentry, struct inode *inode)
 int f2fs_inode_dirtied(struct inode *inode, bool sync);
 void f2fs_inode_synced(struct inode *inode);
 int f2fs_enable_quota_files(struct f2fs_sb_info *sbi, bool rdonly);
+int f2fs_quota_sync(struct super_block *sb, int type);
 void f2fs_quota_off_umount(struct super_block *sb);
 int f2fs_commit_super(struct f2fs_sb_info *sbi, bool recover);
 int f2fs_sync_fs(struct super_block *sb, int sync);
@@ -3105,6 +3163,7 @@ struct page *f2fs_get_lock_data_page(struct inode *inode, pgoff_t index,
 struct page *f2fs_get_new_data_page(struct inode *inode,
 			struct page *ipage, pgoff_t index, bool new_i_size);
 int f2fs_do_write_data_page(struct f2fs_io_info *fio);
+void __do_map_lock(struct f2fs_sb_info *sbi, int flag, bool lock);
 int f2fs_map_blocks(struct inode *inode, struct f2fs_map_blocks *map,
 			int create, int flag);
 int f2fs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
@@ -3157,6 +3216,7 @@ struct f2fs_stat_info {
 	int free_nids, avail_nids, alloc_nids;
 	int total_count, utilization;
 	int bg_gc, nr_wb_cp_data, nr_wb_data;
+	int nr_rd_data, nr_rd_node, nr_rd_meta;
 	int nr_flushing, nr_flushed, flush_list_empty;
 	int nr_discarding, nr_discarded;
 	int nr_discard_cmd;
@@ -3527,3 +3587,16 @@ extern void f2fs_build_fault_attr(struct f2fs_sb_info *sbi, unsigned int rate,
 #endif
 
 #endif
+
+static inline bool is_journalled_quota(struct f2fs_sb_info *sbi)
+{
+#ifdef CONFIG_QUOTA
+	if (f2fs_sb_has_quota_ino(sbi->sb))
+		return true;
+	if (F2FS_OPTION(sbi).s_qf_names[USRQUOTA] ||
+		F2FS_OPTION(sbi).s_qf_names[GRPQUOTA] ||
+		F2FS_OPTION(sbi).s_qf_names[PRJQUOTA])
+		return true;
+#endif
+	return false;
+}

@@ -1609,6 +1609,7 @@ repeat:
 				congestion_wait(BLK_RW_ASYNC, HZ/50);
 				goto repeat;
 			}
+			set_sbi_flag(F2FS_SB(sb), SBI_QUOTA_NEED_REPAIR);
 			return PTR_ERR(page);
 		}
 
@@ -1620,6 +1621,7 @@ repeat:
 		}
 		if (unlikely(!PageUptodate(page))) {
 			f2fs_put_page(page, 1);
+			set_sbi_flag(F2FS_SB(sb), SBI_QUOTA_NEED_REPAIR);
 			return -EIO;
 		}
 
@@ -1661,6 +1663,7 @@ retry:
 				congestion_wait(BLK_RW_ASYNC, HZ/50);
 				goto retry;
 			}
+			set_sbi_flag(F2FS_SB(sb), SBI_QUOTA_NEED_REPAIR);
 			break;
 		}
 
@@ -1697,6 +1700,12 @@ static qsize_t *f2fs_get_reserved_space(struct inode *inode)
 
 static int f2fs_quota_on_mount(struct f2fs_sb_info *sbi, int type)
 {
+	if (is_set_ckpt_flags(sbi, CP_QUOTA_NEED_FSCK_FLAG)) {
+		f2fs_msg(sbi->sb, KERN_ERR,
+			"quota sysfile may be corrupted, skip loading it");
+		return 0;
+	}
+
 	return dquot_quota_on_mount(sbi->sb, F2FS_OPTION(sbi).s_qf_names[type],
 					F2FS_OPTION(sbi).s_jquota_fmt, type);
 }
@@ -1767,7 +1776,14 @@ static int f2fs_enable_quotas(struct super_block *sb)
 		test_opt(F2FS_SB(sb), PRJQUOTA),
 	};
 
+	if (is_set_ckpt_flags(F2FS_SB(sb), CP_QUOTA_NEED_FSCK_FLAG)) {
+		f2fs_msg(sb, KERN_ERR,
+			"quota file may be corrupted, skip loading it");
+		return 0;
+	}
+
 	sb_dqopt(sb)->flags |= DQUOT_QUOTA_SYS_FILE;
+
 	for (type = 0; type < MAXQUOTAS; type++) {
 		qf_inum = f2fs_qf_ino(sb, type);
 		if (qf_inum) {
@@ -1781,6 +1797,8 @@ static int f2fs_enable_quotas(struct super_block *sb)
 					"fsck to fix.", type, err);
 				for (type--; type >= 0; type--)
 					dquot_quota_off(sb, type);
+				set_sbi_flag(F2FS_SB(sb),
+						SBI_QUOTA_NEED_REPAIR);
 				return err;
 			}
 		}
@@ -1788,35 +1806,51 @@ static int f2fs_enable_quotas(struct super_block *sb)
 	return 0;
 }
 
-static int f2fs_quota_sync(struct super_block *sb, int type)
+int f2fs_quota_sync(struct super_block *sb, int type)
 {
+	struct f2fs_sb_info *sbi = F2FS_SB(sb);
 	struct quota_info *dqopt = sb_dqopt(sb);
 	int cnt;
 	int ret;
 
 	ret = dquot_writeback_dquots(sb, type);
 	if (ret)
-		return ret;
+		goto out;
 
 	/*
 	 * Now when everything is written we can discard the pagecache so
 	 * that userspace sees the changes.
 	 */
 	for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
+		struct address_space *mapping;
+
 		if (type != -1 && cnt != type)
 			continue;
 		if (!sb_has_quota_active(sb, cnt))
 			continue;
 
-		ret = filemap_write_and_wait(dqopt->files[cnt]->i_mapping);
+		mapping = dqopt->files[cnt]->i_mapping;
+
+		ret = filemap_fdatawrite(mapping);
 		if (ret)
-			return ret;
+			goto out;
+
+		/* if we are using journalled quota */
+		if (is_journalled_quota(sbi))
+			continue;
+
+		ret = filemap_fdatawait(mapping);
+		if (ret)
+			set_sbi_flag(F2FS_SB(sb), SBI_QUOTA_NEED_REPAIR);
 
 		inode_lock(dqopt->files[cnt]);
 		truncate_inode_pages(&dqopt->files[cnt]->i_data, 0);
 		inode_unlock(dqopt->files[cnt]);
 	}
-	return 0;
+out:
+	if (ret)
+		set_sbi_flag(F2FS_SB(sb), SBI_QUOTA_NEED_REPAIR);
+	return ret;
 }
 
 static int f2fs_quota_on(struct super_block *sb, int type, int format_id,
@@ -1853,7 +1887,9 @@ static int f2fs_quota_off(struct super_block *sb, int type)
 	if (!inode || !igrab(inode))
 		return dquot_quota_off(sb, type);
 
-	f2fs_quota_sync(sb, type);
+	err = f2fs_quota_sync(sb, type);
+	if (err)
+		goto out_put;
 
 	err = dquot_quota_off(sb, type);
 	if (err || f2fs_sb_has_quota_ino(sb))
@@ -1872,9 +1908,86 @@ out_put:
 void f2fs_quota_off_umount(struct super_block *sb)
 {
 	int type;
+	int err;
+ 	for (type = 0; type < MAXQUOTAS; type++) {
+		err = f2fs_quota_off(sb, type);
+		if (err) {
+			int ret = dquot_quota_off(sb, type);
 
-	for (type = 0; type < MAXQUOTAS; type++)
-		f2fs_quota_off(sb, type);
+			f2fs_msg(sb, KERN_ERR,
+				"Fail to turn off disk quota "
+				"(type: %d, err: %d, ret:%d), Please "
+				"run fsck to fix it.", type, err, ret);
+			set_sbi_flag(F2FS_SB(sb), SBI_QUOTA_NEED_REPAIR);
+		}
+	}
+}
+
+static void f2fs_truncate_quota_inode_pages(struct super_block *sb)
+{
+	struct quota_info *dqopt = sb_dqopt(sb);
+	int type;
+ 	for (type = 0; type < MAXQUOTAS; type++) {
+		if (!dqopt->files[type])
+			continue;
+		f2fs_inode_synced(dqopt->files[type]);
+	}
+}
+
+static int f2fs_dquot_commit(struct dquot *dquot)
+{
+	int ret;
+
+	ret = dquot_commit(dquot);
+	if (ret < 0)
+		set_sbi_flag(F2FS_SB(dquot->dq_sb), SBI_QUOTA_NEED_REPAIR);
+	return ret;
+}
+
+static int f2fs_dquot_acquire(struct dquot *dquot)
+{
+	int ret;
+
+	ret = dquot_acquire(dquot);
+	if (ret < 0)
+		set_sbi_flag(F2FS_SB(dquot->dq_sb), SBI_QUOTA_NEED_REPAIR);
+
+	return ret;
+}
+
+static int f2fs_dquot_release(struct dquot *dquot)
+{
+	int ret;
+
+	ret = dquot_release(dquot);
+	if (ret < 0)
+		set_sbi_flag(F2FS_SB(dquot->dq_sb), SBI_QUOTA_NEED_REPAIR);
+	return ret;
+}
+
+static int f2fs_dquot_mark_dquot_dirty(struct dquot *dquot)
+{
+	struct super_block *sb = dquot->dq_sb;
+	struct f2fs_sb_info *sbi = F2FS_SB(sb);
+	int ret;
+
+	ret = dquot_mark_dquot_dirty(dquot);
+
+	/* if we are using journalled quota */
+	if (is_journalled_quota(sbi))
+		set_sbi_flag(sbi, SBI_QUOTA_NEED_FLUSH);
+
+	return ret;
+}
+
+static int f2fs_dquot_commit_info(struct super_block *sb, int type)
+{
+	int ret;
+
+	ret = dquot_commit_info(sb, type);
+	if (ret < 0)
+		set_sbi_flag(F2FS_SB(sb), SBI_QUOTA_NEED_REPAIR);
+	return ret;
 }
 
 #if 0
@@ -1887,11 +2000,11 @@ static int f2fs_get_projid(struct inode *inode, kprojid_t *projid)
 
 static const struct dquot_operations f2fs_quota_operations = {
 	.get_reserved_space = f2fs_get_reserved_space,
-	.write_dquot	= dquot_commit,
-	.acquire_dquot	= dquot_acquire,
-	.release_dquot	= dquot_release,
-	.mark_dirty	= dquot_mark_dquot_dirty,
-	.write_info	= dquot_commit_info,
+	.write_dquot	= f2fs_dquot_commit,
+	.acquire_dquot	= f2fs_dquot_acquire,
+	.release_dquot	= f2fs_dquot_release,
+	.mark_dirty	= f2fs_dquot_mark_dquot_dirty,
+	.write_info	= f2fs_dquot_commit_info,
 	.alloc_dquot	= dquot_alloc,
 	.destroy_dquot	= dquot_destroy,
 #if 0
@@ -1910,6 +2023,11 @@ static const struct quotactl_ops f2fs_quotactl_ops = {
 	.set_dqblk	= dquot_set_dqblk,
 };
 #else
+int f2fs_quota_sync(struct super_block *sb, int type)
+{
+	return 0;
+}
+
 void f2fs_quota_off_umount(struct super_block *sb)
 {
 }
@@ -2427,6 +2545,8 @@ static void init_sb_info(struct f2fs_sb_info *sbi)
 	sbi->dir_level = DEF_DIR_LEVEL;
 	sbi->interval_time[CP_TIME] = DEF_CP_INTERVAL;
 	sbi->interval_time[REQ_TIME] = DEF_IDLE_INTERVAL;
+	sbi->interval_time[DISCARD_TIME] = DEF_IDLE_INTERVAL;
+	sbi->interval_time[GC_TIME] = DEF_IDLE_INTERVAL;
 	clear_sbi_flag(sbi, SBI_NEED_FSCK);
 
 	for (i = 0; i < NR_COUNT_TYPE; i++)
@@ -2917,6 +3037,9 @@ try_onemore:
 		goto free_meta_inode;
 	}
 
+	if (__is_set_ckpt_flags(F2FS_CKPT(sbi), CP_QUOTA_NEED_FSCK_FLAG))
+		set_sbi_flag(sbi, SBI_QUOTA_NEED_REPAIR);
+
 	/* Initialize device list */
 	err = f2fs_scan_devices(sbi);
 	if (err) {
@@ -3097,10 +3220,10 @@ skip_recovery:
 
 free_meta:
 #ifdef CONFIG_QUOTA
+	f2fs_truncate_quota_inode_pages(sb);
 	if (f2fs_sb_has_quota_ino(sb) && !f2fs_readonly(sb))
 		f2fs_quota_off_umount(sbi->sb);
 #endif
-	f2fs_sync_inode_meta(sbi);
 	/*
 	 * Some dirty meta pages can be produced by f2fs_recover_orphan_inodes()
 	 * failed by EIO. Then, iput(node_inode) can trigger balance_fs_bg()
