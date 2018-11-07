@@ -34,7 +34,6 @@
 #include <linux/of.h>
 #include <linux/of_gpio.h>
 #include <linux/platform_device.h>
-#include <linux/wakelock.h>
 
 #define FPC_TTW_HOLD_TIME 1000
 
