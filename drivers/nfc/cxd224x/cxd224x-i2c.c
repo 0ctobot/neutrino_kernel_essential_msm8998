@@ -661,21 +661,21 @@ static struct i2c_driver cxd224x_driver = {
 	},
 };
 
-/*
- * module load/unload record keeping
- */
+static struct work_struct boot_work;
+
+static void __init cxd224x_dev_init_work(struct work_struct *work)
+{
+	i2c_add_driver(&cxd224x_driver);
+}
 
 static int __init cxd224x_dev_init(void)
 {
-	return i2c_add_driver(&cxd224x_driver);
-}
-module_init(cxd224x_dev_init);
+	INIT_WORK(&boot_work, cxd224x_dev_init_work);
+	schedule_work(&boot_work);
 
-static void __exit cxd224x_dev_exit(void)
-{
-	i2c_del_driver(&cxd224x_driver);
+	return 0;
 }
-module_exit(cxd224x_dev_exit);
+device_initcall(cxd224x_dev_init);
 
 MODULE_AUTHOR("Sony");
 MODULE_DESCRIPTION("NFC cxd224x driver");

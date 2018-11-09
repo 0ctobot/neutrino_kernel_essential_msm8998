@@ -688,7 +688,7 @@ static int msm_cpe_lab_thread(void *data)
 			lab_d->thread_status = MSM_LSM_LAB_THREAD_ERROR;
 		}
 
-		rc = wait_for_completion_timeout(&lab_d->comp, (2 * HZ/10));
+		rc = wait_for_completion_timeout(&lab_d->comp, msecs_to_jiffies(200));
 		if (!rc) {
 			dev_err(rtd->dev,
 				"%s: wait timedout for slim buffer\n",
@@ -2391,7 +2391,7 @@ done:
 	return err;
 }
 
-#ifdef CONFIG_COMPAT
+#ifndef CONFIG_BOARD_MATA
 struct snd_lsm_sound_model_v2_32 {
 	compat_uptr_t data;
 	compat_uptr_t confidence_level;
