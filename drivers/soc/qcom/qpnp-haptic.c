@@ -1446,16 +1446,22 @@ static ssize_t qpnp_hap_play_mode_show(struct device *dev,
 					 timed_dev);
 	char *str;
 
-	if (hap->play_mode == QPNP_HAP_BUFFER)
-		str = "buffer";
-	else if (hap->play_mode == QPNP_HAP_DIRECT)
-		str = "direct";
-	else if (hap->play_mode == QPNP_HAP_AUDIO)
-		str = "audio";
-	else if (hap->play_mode == QPNP_HAP_PWM)
-		str = "pwm";
-	else
-		return -EINVAL;
+	switch (hap->play_mode) {
+		case QPNP_HAP_BUFFER:
+			str = "buffer";
+			break;
+		case QPNP_HAP_DIRECT:
+			str = "direct";
+			break;
+		case QPNP_HAP_AUDIO:
+			str = "audio";
+			break;
+		case QPNP_HAP_PWM:
+			str = "pwm";
+			break;
+		default:
+			return -EINVAL;
+	}
 
 	return snprintf(buf, PAGE_SIZE, "%s\n", str);
 }

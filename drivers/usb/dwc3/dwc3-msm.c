@@ -46,6 +46,8 @@
 #include <linux/irq.h>
 #include <linux/extcon.h>
 #include <linux/reset.h>
+#include <linux/cpu_input_boost.h>
+#include <linux/devfreq_boost.h>
 #include <soc/qcom/boot_stats.h>
 
 #include "power.h"
@@ -3418,6 +3420,9 @@ static int dwc3_msm_host_notifier(struct notifier_block *nb,
 		if (!mdwc->usb_psy)
 			return NOTIFY_DONE;
 	}
+
+	cpu_input_boost_kick_max(500);
+	devfreq_boost_kick_max(DEVFREQ_MSM_CPUBW, 1250);
 
 	dwc3_device_has_audio_interface(udev, mdwc);
 
