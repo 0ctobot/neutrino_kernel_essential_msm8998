@@ -267,10 +267,8 @@ retry:
 		}
 next:
 		/* we don't need to invalidate this in the sccessful status */
-		if (drop || recover) {
+		if (drop || recover)
 			ClearPageUptodate(page);
-			clear_cold_data(page);
-		}
 		set_page_private(page, 0);
 		ClearPagePrivate(page);
 		f2fs_put_page(page, 1);
@@ -513,7 +511,7 @@ void f2fs_balance_fs_bg(struct f2fs_sb_info *sbi)
 	else
 		f2fs_build_free_nids(sbi, false, false);
 
-	if (!is_idle(sbi, REQ_TIME) &&
+	if (!is_idle(sbi) &&
 		(!excess_dirty_nats(sbi) && !excess_dirty_nodes(sbi)))
 		return;
 
@@ -1393,7 +1391,7 @@ static unsigned int __issue_discard_cmd_orderly(struct f2fs_sb_info *sbi,
 		if (dc->state != D_PREP)
 			goto next;
 
-		if (dpolicy->io_aware && !is_idle(sbi, DISCARD_TIME)) {
+		if (dpolicy->io_aware && !is_idle(sbi)) {
 			io_interrupted = true;
 			break;
 		}
@@ -1453,7 +1451,7 @@ static int __issue_discard_cmd(struct f2fs_sb_info *sbi,
 			f2fs_bug_on(sbi, dc->state != D_PREP);
 
 			if (dpolicy->io_aware && i < dpolicy->io_aware_gran &&
-						!is_idle(sbi, DISCARD_TIME)) {
+								!is_idle(sbi)) {
 				io_interrupted = true;
 				break;
 			}
@@ -1682,9 +1680,9 @@ static int issue_discard_thread(void *data)
 			__wait_all_discard_cmd(sbi, &dpolicy);
 			wait_ms = dpolicy.min_interval;
 		} else if (issued == -1){
-			wait_ms = f2fs_time_to_wait(sbi, DISCARD_TIME);
-			if (!wait_ms)
-				wait_ms = dpolicy.max_interval;
+			wait_ms = dpolicy.mid_interval;
+		} else {
+			wait_ms = dpolicy.max_interval;
 		}
 
 		sb_end_intwrite(sbi->sb);
