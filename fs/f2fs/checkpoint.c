@@ -1085,21 +1085,6 @@ static void __prepare_cp_block(struct f2fs_sb_info *sbi)
 	ckpt->next_free_nid = cpu_to_le32(last_nid);
 }
 
-static bool __need_flush_quota(struct f2fs_sb_info *sbi)
-{
-	if (!is_journalled_quota(sbi))
-		return false;
-	if (is_sbi_flag_set(sbi, SBI_QUOTA_SKIP_FLUSH))
-		return false;
-	if (is_sbi_flag_set(sbi, SBI_QUOTA_NEED_REPAIR))
-		return false;
-	if (is_sbi_flag_set(sbi, SBI_QUOTA_NEED_FLUSH))
-		return true;
-	if (get_pages(sbi, F2FS_DIRTY_QDATA))
-		return true;
-	return false;
-}
-
 /*
  * Freeze all the FS-operations for checkpoint.
  */
@@ -1111,36 +1096,12 @@ static int block_operations(struct f2fs_sb_info *sbi)
 		.for_reclaim = 0,
 	};
 	struct blk_plug plug;
-	int err = 0, cnt = 0;
+	int err = 0;
 
 	blk_start_plug(&plug);
 
-retry_flush_quotas:
-	if (__need_flush_quota(sbi)) {
-		int locked;
-
-		if (++cnt > DEFAULT_RETRY_QUOTA_FLUSH_COUNT) {
-			set_sbi_flag(sbi, SBI_QUOTA_SKIP_FLUSH);
-			f2fs_lock_all(sbi);
-			goto retry_flush_dents;
-		}
-		clear_sbi_flag(sbi, SBI_QUOTA_NEED_FLUSH);
-
-		/* only failed during mount/umount/freeze/quotactl */
-		locked = down_read_trylock(&sbi->sb->s_umount);
-		f2fs_quota_sync(sbi->sb, -1);
-		if (locked)
-			up_read(&sbi->sb->s_umount);
-	}
-
-	f2fs_lock_all(sbi);
-	if (__need_flush_quota(sbi)) {
-		f2fs_unlock_all(sbi);
-		cond_resched();
-		goto retry_flush_quotas;
-	}
-
 retry_flush_dents:
+	f2fs_lock_all(sbi);
 	/* write all the dirty dentry pages */
 	if (get_pages(sbi, F2FS_DIRTY_DENTS)) {
 		f2fs_unlock_all(sbi);
@@ -1148,7 +1109,7 @@ retry_flush_dents:
 		if (err)
 			goto out;
 		cond_resched();
-		goto retry_flush_quotas;
+		goto retry_flush_dents;
 	}
 
 	/*
@@ -1157,12 +1118,6 @@ retry_flush_dents:
 	 */
 	down_write(&sbi->node_change);
 
-	if (__need_flush_quota(sbi)) {
-		up_write(&sbi->node_change);
-		f2fs_unlock_all(sbi);
-		goto retry_flush_quotas;
-	}
-
 	if (get_pages(sbi, F2FS_DIRTY_IMETA)) {
 		up_write(&sbi->node_change);
 		f2fs_unlock_all(sbi);
@@ -1170,7 +1125,7 @@ retry_flush_dents:
 		if (err)
 			goto out;
 		cond_resched();
-		goto retry_flush_quotas;
+		goto retry_flush_dents;
 	}
 
 retry_flush_nodes:
@@ -1260,14 +1215,6 @@ static void update_ckpt_flags(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 
 	if (is_sbi_flag_set(sbi, SBI_NEED_FSCK))
 		__set_ckpt_flags(ckpt, CP_FSCK_FLAG);
-
-	if (is_sbi_flag_set(sbi, SBI_QUOTA_SKIP_FLUSH))
-		__set_ckpt_flags(ckpt, CP_QUOTA_NEED_FSCK_FLAG);
-	else
-		__clear_ckpt_flags(ckpt, CP_QUOTA_NEED_FSCK_FLAG);
-
-	if (is_sbi_flag_set(sbi, SBI_QUOTA_NEED_REPAIR))
-		__set_ckpt_flags(ckpt, CP_QUOTA_NEED_FSCK_FLAG);
 
 	/* set this flag to activate crc|cp_ver for recovery */
 	__set_ckpt_flags(ckpt, CP_CRC_RECOVERY_FLAG);
@@ -1476,7 +1423,6 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 
 	clear_sbi_flag(sbi, SBI_IS_DIRTY);
 	clear_sbi_flag(sbi, SBI_NEED_CP);
-	clear_sbi_flag(sbi, SBI_QUOTA_SKIP_FLUSH);
 	__set_cp_next_pack(sbi);
 
 	/*
