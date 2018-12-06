@@ -520,6 +520,7 @@ asmlinkage __visible void __init start_kernel(void)
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
+	add_device_randomness(command_line, strlen(command_line));
 	/*
 	 * Set up the the initial canary ASAP:
 	 */
@@ -881,7 +882,6 @@ static void __init do_basic_setup(void)
 	do_ctors();
 	usermodehelper_enable();
 	do_initcalls();
-	random_int_secret_init();
 }
 
 static void __init do_pre_smp_initcalls(void)
