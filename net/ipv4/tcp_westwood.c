@@ -43,8 +43,8 @@ struct westwood {
 };
 
 /* TCP Westwood functions and constants */
-#define TCP_WESTWOOD_RTT_MIN   (HZ/20)	/* 50ms */
-#define TCP_WESTWOOD_INIT_RTT  (20*HZ)	/* maybe too conservative?! */
+const int tcp_westwood_rtt_min = 50;
+const int tcp_westwood_init_rtt = 2000;
 
 /*
  * @tcp_westwood_create
@@ -57,6 +57,7 @@ struct westwood {
  * way as soon as possible. It will reasonably happen within the first
  * RTT period of the connection lifetime.
  */
+
 static void tcp_westwood_init(struct sock *sk)
 {
 	struct westwood *w = inet_csk_ca(sk);
@@ -67,8 +68,8 @@ static void tcp_westwood_init(struct sock *sk)
 	w->accounted = 0;
 	w->cumul_ack = 0;
 	w->reset_rtt_min = 1;
-	w->rtt_min = w->rtt = TCP_WESTWOOD_INIT_RTT;
-	w->rtt_win_sx = tcp_time_stamp;
+	w->rtt_min = w->rtt = msecs_to_jiffies(tcp_westwood_init_rtt);
+	w->rtt_win_sx = tcp_jiffies32;
 	w->snd_una = tcp_sk(sk)->snd_una;
 	w->first_ack = 1;
 }
@@ -99,12 +100,13 @@ static void westwood_filter(struct westwood *w, u32 delta)
  * Called after processing group of packets.
  * but all westwood needs is the last sample of srtt.
  */
-static void tcp_westwood_pkts_acked(struct sock *sk, u32 cnt, s32 rtt)
+static void tcp_westwood_pkts_acked(struct sock *sk,
+				    const struct ack_sample *sample)
 {
 	struct westwood *w = inet_csk_ca(sk);
 
-	if (rtt > 0)
-		w->rtt = usecs_to_jiffies(rtt);
+	if (sample->rtt_us > 0)
+		w->rtt = usecs_to_jiffies(sample->rtt_us);
 }
 
 /*
@@ -115,7 +117,7 @@ static void tcp_westwood_pkts_acked(struct sock *sk, u32 cnt, s32 rtt)
 static void westwood_update_window(struct sock *sk)
 {
 	struct westwood *w = inet_csk_ca(sk);
-	s32 delta = tcp_time_stamp - w->rtt_win_sx;
+	s32 delta = tcp_jiffies32 - w->rtt_win_sx;
 
 	/* Initialize w->snd_una with the first acked sequence number in order
 	 * to fix mismatch between tp->snd_una and w->snd_una for the first
@@ -135,11 +137,11 @@ static void westwood_update_window(struct sock *sk)
 	 * Obviously on a LAN we reasonably will always have
 	 * right_bound = left_bound + WESTWOOD_RTT_MIN
 	 */
-	if (w->rtt && delta > max_t(u32, w->rtt, TCP_WESTWOOD_RTT_MIN)) {
+	if (w->rtt && delta > max_t(u32, w->rtt, msecs_to_jiffies(tcp_westwood_rtt_min))) {
 		westwood_filter(w, delta);
 
 		w->bk = 0;
-		w->rtt_win_sx = tcp_time_stamp;
+		w->rtt_win_sx = tcp_jiffies32;
 	}
 }
 
@@ -264,8 +266,8 @@ static size_t tcp_westwood_info(struct sock *sk, u32 ext, int *attr,
 	if (ext & (1 << (INET_DIAG_VEGASINFO - 1))) {
 		info->vegas.tcpv_enabled = 1;
 		info->vegas.tcpv_rttcnt	= 0;
-		info->vegas.tcpv_rtt	= jiffies_to_usecs(ca->rtt),
-		info->vegas.tcpv_minrtt	= jiffies_to_usecs(ca->rtt_min),
+		info->vegas.tcpv_rtt	= jiffies_to_usecs(ca->rtt);
+		info->vegas.tcpv_minrtt	= jiffies_to_usecs(ca->rtt_min);
 
 		*attr = INET_DIAG_VEGASINFO;
 		return sizeof(struct tcpvegas_info);
