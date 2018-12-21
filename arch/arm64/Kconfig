@@ -3,6 +3,7 @@ config ARM64
 	select ACPI_CCA_REQUIRED if ACPI
 	select ACPI_GENERIC_GSI if ACPI
 	select ACPI_REDUCED_HARDWARE_ONLY if ACPI
+	select ARCH_CLOCKSOURCE_DATA
 	select ARCH_HAS_ATOMIC64_DEC_IF_POSITIVE
 	select ARCH_HAS_ELF_RANDOMIZE
 	select ARCH_HAS_FORTIFY_SOURCE
@@ -750,16 +751,6 @@ config ARM64_REG_REBALANCE_ON_CTX_SW
 	help
 	 Forcefully re-balance register rename pools on context switches for
 	 improved performance on some devices.
-
-config PERF_EVENTS_USERMODE
-	bool "Enable usermode access for perf events"
-	depends on PERF_EVENTS
-	help
-	  Enable user-mode access to performance counters for perf events.
-	  If enabled, the access permissions allowing CPU performance
-	  counters to be accessed from user-mode are set.
-
-	  If you want user-mode programs to access perf events, say Y
 
 config PERF_EVENTS_RESET_PMU_DEBUGFS
 	bool "Reset PMU via debugfs node"
